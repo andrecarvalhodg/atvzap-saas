@@ -1,0 +1,182 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Auth.js Models ──────────────────────────────────────────────
+
+model User {
+  id                       String    @id @default(cuid())
+  name                     String?
+  email                    String    @unique
+  image                    String?
+  emailVerified            DateTime? @map("email_verified")
+  stripeCustomerId         String?   @unique @map("stripe_customer_id")
+  stripePriceId            String?   @map("stripe_price_id")
+  stripeSubscriptionId     String?   @unique @map("stripe_subscription_id")
+  stripeCurrentPeriodEnd   DateTime? @map("stripe_current_period_end")
+  trialEndsAt              DateTime? @map("trial_ends_at")
+  plan                     String    @default("FREE") @map("plan")
+  createdAt                DateTime  @default(now()) @map("created_at")
+  updatedAt                DateTime  @updatedAt @map("updated_at")
+
+  accounts          Account[]
+  sessions          Session[]
+  whatsappInstances WhatsAppInstance[]
+  contactLists      ContactList[]
+  webhookConfigs    WebhookConfig[]
+  campaigns         Campaign[]
+  messageLogs       MessageLog[]
+
+  @@map("users")
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String  @map("user_id")
+  type              String
+  provider          String
+  providerAccountId String  @map("provider_account_id")
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@map("accounts")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique @map("session_token")
+  userId       String   @map("user_id")
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+model VerificationToken {
+  identifier String
+  token      String
+  expires    DateTime
+
+  @@unique([identifier, token])
+  @@map("verification_tokens")
+}
+
+// ─── WhatsApp & Messaging Models ─────────────────────────────────
+
+model WhatsAppInstance {
+  id           String   @id @default(cuid())
+  userId       String   @map("user_id")
+  name         String
+  phone        String?
+  status       String   @default("disconnected")
+  messagesSent Int      @default(0) @map("messages_sent")
+  isActive     Boolean  @default(false) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("whatsapp_instances")
+}
+
+model ContactList {
+  id        String   @id @default(cuid())
+  userId    String   @map("user_id")
+  name      String
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  contacts Contact[]
+
+  @@map("contact_lists")
+}
+
+model Contact {
+  id        String   @id @default(cuid())
+  name      String
+  phone     String
+  email     String?
+  listId    String   @map("list_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  list ContactList @relation(fields: [listId], references: [id], onDelete: Cascade)
+
+  @@map("contacts")
+}
+
+model WebhookConfig {
+  id           String   @id @default(cuid())
+  userId       String   @map("user_id")
+  title        String
+  instanceId   String   @map("instance_id")
+  platform     String   @default("doppus")
+  event        String   @default("purchase_approved")
+  listId       String?  @map("list_id")
+  adminPhone   String?  @map("admin_phone")
+  adminMessage String?  @map("admin_message")
+  message1     String   @map("message_1")
+  delay1       Int      @default(0) @map("delay_1")
+  message2     String?  @map("message_2")
+  delay2       Int      @default(0) @map("delay_2")
+  message3     String?  @map("message_3")
+  status       String   @default("active")
+  token        String   @unique @default(cuid())
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("webhook_configs")
+}
+
+model Campaign {
+  id            String    @id @default(cuid())
+  userId        String    @map("user_id")
+  name          String
+  instanceId    String    @map("instance_id")
+  listId        String    @map("list_id")
+  message       String
+  schedule      String    @default("immediate")
+  scheduledAt   DateTime? @map("scheduled_at")
+  status        String    @default("pending")
+  totalContacts Int       @default(0) @map("total_contacts")
+  sentCount     Int       @default(0) @map("sent_count")
+  errorCount    Int       @default(0) @map("error_count")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("campaigns")
+}
+
+model MessageLog {
+  id         String   @id @default(cuid())
+  userId     String?  @map("user_id")
+  instanceId String?  @map("instance_id")
+  sender     String   @default("system")
+  phone      String
+  status     String   @default("sent")
+  message    String
+  source     String   @default("webhook")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@map("message_logs")
+}

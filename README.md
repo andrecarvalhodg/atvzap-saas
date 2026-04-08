@@ -1,36 +1,75 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# ATVzap - Automacao WhatsApp para Infoprodutores
 
-## Getting Started
+Plataforma SaaS para automacao de mensagens WhatsApp integrada com plataformas de infoprodutos (Doppus, Kiwify, Hotmart).
 
-First, run the development server:
+## Stack
+
+- **Framework**: Next.js 16 (App Router)
+- **Linguagem**: TypeScript
+- **Estilizacao**: Tailwind CSS 4 + shadcn/ui
+- **Banco de Dados**: PostgreSQL (Neon)
+- **ORM**: Prisma 6
+- **Autenticacao**: Auth.js v5 (Google + Magic Link)
+- **Pagamentos**: Stripe
+- **Emails**: Resend
+- **Data Fetching**: TanStack Query
+- **Deploy**: Vercel
+
+## Setup
+
+### Pre-requisitos
+
+- Node.js 18+
+- npm
+- Conta no [Neon](https://neon.tech) (PostgreSQL gratuito)
+- Conta no [Vercel](https://vercel.com)
+
+### Instalacao
 
 ```bash
+# Clone o repositorio
+git clone https://github.com/andrecarvalhodg/atvzap-saas.git
+cd atvzap-saas
+
+# Instale as dependencias
+npm install
+
+# Copie o arquivo de variaveis de ambiente
+cp .env.example .env
+
+# Preencha as variaveis no .env
+
+# Gere o Prisma Client
+npx prisma generate
+
+# Aplique o schema no banco
+npx prisma db push
+
+# Inicie o servidor de desenvolvimento
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+### Variaveis de Ambiente
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+Veja `.env.example` para a lista completa. Voce precisa configurar:
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+1. **DATABASE_URL** - Connection string do Neon
+2. **AUTH_SECRET** - Gere com `openssl rand -base64 32`
+3. **AUTH_GOOGLE_ID/SECRET** - Google Cloud Console
+4. **STRIPE_SECRET_KEY** - Dashboard do Stripe
+5. **RESEND_API_KEY** - Dashboard do Resend
 
-## Learn More
+### Design System
 
-To learn more about Next.js, take a look at the following resources:
+Os tokens de design ficam em `design-system/tokens.ts`. Para gerar o CSS:
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+```bash
+npm run tokens        # Gera globals.css
+npm run tokens:check  # Verifica sincronizacao (CI)
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Deploy
 
-## Deploy on Vercel
+O projeto esta conectado ao Vercel com deploy automatico a cada push na branch master.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+URL: https://atvzap-saas.vercel.app
