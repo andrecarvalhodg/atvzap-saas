@@ -1,13 +1,15 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   Plus,
   Trash2,
   QrCode,
   MessageCircle,
-  X,
   Send,
+  Loader2,
+  WifiOff,
+  RefreshCw,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -38,29 +40,6 @@ interface Instance {
   messagesSent: number;
 }
 
-function QrCodePattern() {
-  return (
-    <svg width={200} height={200} viewBox="0 0 200 200">
-      <rect width={200} height={200} fill="white" />
-      {/* Finder patterns - top-left, top-right, bottom-left */}
-      <rect x={10} y={10} width={42} height={42} fill="none" stroke="black" strokeWidth={6} />
-      <rect x={22} y={22} width={18} height={18} fill="black" />
-      <rect x={148} y={10} width={42} height={42} fill="none" stroke="black" strokeWidth={6} />
-      <rect x={160} y={22} width={18} height={18} fill="black" />
-      <rect x={10} y={148} width={42} height={42} fill="none" stroke="black" strokeWidth={6} />
-      <rect x={22} y={160} width={18} height={18} fill="black" />
-      {/* Random-looking data modules */}
-      {Array.from({ length: 80 }).map((_, i) => {
-        const x = 60 + (i % 10) * 9;
-        const y = 60 + Math.floor(i / 10) * 9;
-        return i % 3 !== 0 ? (
-          <rect key={i} x={x} y={y} width={7} height={7} fill="black" />
-        ) : null;
-      })}
-    </svg>
-  );
-}
-
 export default function InstanciasPage() {
   const [instances, setInstances] = useState<Instance[]>([]);
   const [loading, setLoading] = useState(true);
@@ -71,7 +50,11 @@ export default function InstanciasPage() {
   // QR Code modal
   const [qrOpen, setQrOpen] = useState(false);
   const [qrInstance, setQrInstance] = useState<Instance | null>(null);
-  const [connecting, setConnecting] = useState(false);
+  const [qrImage, setQrImage] = useState<string | null>(null);
+  const [qrLoading, setQrLoading] = useState(false);
+  const [qrError, setQrError] = useState("");
+  const [qrConnected, setQrConnected] = useState(false);
+  const pollRef = useRef<NodeJS.Timeout | null>(null);
 
   // Send message modal
   const [msgOpen, setMsgOpen] = useState(false);
@@ -88,7 +71,7 @@ export default function InstanciasPage() {
         setInstances(data);
       }
     } catch {
-      // API may not exist yet
+      // ignore
     } finally {
       setLoading(false);
     }
@@ -97,6 +80,13 @@ export default function InstanciasPage() {
   useEffect(() => {
     fetchInstances();
   }, [fetchInstances]);
+
+  // Cleanup polling on unmount
+  useEffect(() => {
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
+  }, []);
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
@@ -109,45 +99,113 @@ export default function InstanciasPage() {
         body: JSON.stringify({ name: newName.trim() }),
       });
       if (res.ok) {
+        const inst = await res.json();
         setNewName("");
         setShowCreateForm(false);
         await fetchInstances();
+        // Auto-open QR modal
+        openQrModal(inst);
+      } else {
+        const data = await res.json();
+        alert(data.error || "Erro ao criar instância");
       }
     } catch {
-      // handle error silently
+      alert("Erro de conexão");
     } finally {
       setCreating(false);
     }
   }
 
   async function handleDelete(id: string) {
+    if (!confirm("Deseja remover esta instância?")) return;
     try {
       await fetch(`/api/instances/${id}`, { method: "DELETE" });
       await fetchInstances();
     } catch {
-      // handle error silently
+      // ignore
     }
   }
 
-  function openQrModal(instance: Instance) {
-    setQrInstance(instance);
-    setQrOpen(true);
-  }
-
-  async function handleSimulateConnect() {
-    if (!qrInstance) return;
-    setConnecting(true);
+  async function handleDisconnect(id: string) {
     try {
-      await fetch(`/api/instances/${qrInstance.id}/connect`, {
-        method: "PATCH",
-      });
+      await fetch(`/api/instances/${id}/disconnect`, { method: "PATCH" });
       await fetchInstances();
-      setQrOpen(false);
     } catch {
-      // handle error silently
-    } finally {
-      setConnecting(false);
+      // ignore
     }
+  }
+
+  async function openQrModal(instance: Instance) {
+    setQrInstance(instance);
+    setQrImage(null);
+    setQrError("");
+    setQrConnected(false);
+    setQrOpen(true);
+    setQrLoading(true);
+
+    // Fetch QR code
+    try {
+      const res = await fetch(`/api/instances/${instance.id}/connect`);
+      const data = await res.json();
+
+      if (!res.ok) {
+        setQrError(data.error || "Erro ao gerar QR Code");
+        setQrLoading(false);
+        return;
+      }
+
+      if (data.status === "connected") {
+        setQrConnected(true);
+        setQrLoading(false);
+        await fetchInstances();
+        return;
+      }
+
+      if (data.qrcode) {
+        // Evolution API returns base64 with or without data:image prefix
+        const src = data.qrcode.startsWith("data:")
+          ? data.qrcode
+          : `data:image/png;base64,${data.qrcode}`;
+        setQrImage(src);
+      } else {
+        setQrError("QR Code não disponível. Tente novamente.");
+      }
+    } catch {
+      setQrError("Erro de conexão ao buscar QR Code");
+    } finally {
+      setQrLoading(false);
+    }
+
+    // Poll for connection status every 3 seconds
+    if (pollRef.current) clearInterval(pollRef.current);
+    pollRef.current = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/instances/${instance.id}/connect`, {
+          method: "PATCH",
+        });
+        const data = await res.json();
+        if (data.status === "connected") {
+          setQrConnected(true);
+          if (pollRef.current) clearInterval(pollRef.current);
+          await fetchInstances();
+        }
+      } catch {
+        // ignore
+      }
+    }, 3000);
+  }
+
+  async function refreshQr() {
+    if (!qrInstance) return;
+    openQrModal(qrInstance);
+  }
+
+  function closeQrModal() {
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+    setQrOpen(false);
   }
 
   function openMsgModal(instance: Instance) {
@@ -162,14 +220,20 @@ export default function InstanciasPage() {
     if (!msgInstance || !msgPhone.trim() || !msgText.trim()) return;
     setSending(true);
     try {
-      await fetch(`/api/instances/${msgInstance.id}/send`, {
+      const res = await fetch(`/api/instances/${msgInstance.id}/send`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ phone: msgPhone.trim(), message: msgText.trim() }),
       });
-      setMsgOpen(false);
+      if (res.ok) {
+        setMsgOpen(false);
+        await fetchInstances();
+      } else {
+        const data = await res.json();
+        alert(data.error || "Erro ao enviar");
+      }
     } catch {
-      // handle error silently
+      alert("Erro de conexão");
     } finally {
       setSending(false);
     }
@@ -179,24 +243,24 @@ export default function InstanciasPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold tracking-tight text-foreground">
-          Instancias
+          Instâncias WhatsApp
         </h1>
         <Button onClick={() => setShowCreateForm(!showCreateForm)}>
           <Plus className="mr-2 h-4 w-4" />
-          Nova Instancia
+          Nova Instância
         </Button>
       </div>
 
       {showCreateForm && (
         <Card>
           <CardHeader>
-            <CardTitle>Criar Instancia</CardTitle>
+            <CardTitle>Criar Instância</CardTitle>
           </CardHeader>
           <CardContent>
             <form onSubmit={handleCreate} className="flex items-end gap-4">
               <div className="flex-1">
                 <label className="text-sm font-medium text-foreground mb-1.5 block">
-                  Nome da instancia
+                  Nome da instância
                 </label>
                 <Input
                   placeholder="Ex: Atendimento Principal"
@@ -206,13 +270,13 @@ export default function InstanciasPage() {
                 />
               </div>
               <Button type="submit" disabled={creating}>
-                {creating ? "Criando..." : "Criar"}
+                {creating ? (
+                  <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Criando...</>
+                ) : (
+                  "Criar e Conectar"
+                )}
               </Button>
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => setShowCreateForm(false)}
-              >
+              <Button type="button" variant="outline" onClick={() => setShowCreateForm(false)}>
                 Cancelar
               </Button>
             </form>
@@ -224,23 +288,26 @@ export default function InstanciasPage() {
         <CardContent className="p-0">
           {loading ? (
             <div className="p-8 text-center text-muted-foreground">
+              <Loader2 className="h-6 w-6 animate-spin mx-auto mb-2" />
               Carregando...
             </div>
           ) : instances.length === 0 ? (
-            <div className="p-8 text-center text-muted-foreground">
-              Nenhuma instancia cadastrada.
+            <div className="p-12 text-center text-muted-foreground">
+              <QrCode className="h-10 w-10 mx-auto mb-3 opacity-30" />
+              <p>Nenhuma instância cadastrada</p>
+              <p className="text-xs mt-1">Clique em &quot;Nova Instância&quot; para conectar seu WhatsApp</p>
             </div>
           ) : (
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead className="w-16">ID</TableHead>
-                  <TableHead className="w-16">Perfil</TableHead>
+                  <TableHead className="w-12">#</TableHead>
+                  <TableHead className="w-12">Perfil</TableHead>
                   <TableHead>Nome</TableHead>
                   <TableHead>WhatsApp</TableHead>
-                  <TableHead>Mensagens Enviadas</TableHead>
+                  <TableHead>Msgs Enviadas</TableHead>
                   <TableHead>Status</TableHead>
-                  <TableHead className="text-right">Acao</TableHead>
+                  <TableHead className="text-right">Ações</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -255,7 +322,7 @@ export default function InstanciasPage() {
                       </div>
                     </TableCell>
                     <TableCell className="font-medium">{inst.name}</TableCell>
-                    <TableCell className="text-muted-foreground">
+                    <TableCell className="text-muted-foreground font-mono text-sm">
                       {inst.phone || "—"}
                     </TableCell>
                     <TableCell>{inst.messagesSent}</TableCell>
@@ -270,22 +337,33 @@ export default function InstanciasPage() {
                     </TableCell>
                     <TableCell>
                       <div className="flex items-center justify-end gap-2">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => openQrModal(inst)}
-                          title="QR Code"
-                        >
-                          <QrCode className="h-4 w-4" />
-                        </Button>
-                        {inst.status === "connected" && (
+                        {inst.status === "connected" ? (
+                          <>
+                            <Button
+                              size="sm"
+                              className="bg-green-600 hover:bg-green-700 text-white"
+                              onClick={() => openMsgModal(inst)}
+                              title="Enviar Mensagem"
+                            >
+                              <MessageCircle className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => handleDisconnect(inst.id)}
+                              title="Desconectar"
+                            >
+                              <WifiOff className="h-4 w-4" />
+                            </Button>
+                          </>
+                        ) : (
                           <Button
+                            variant="outline"
                             size="sm"
-                            className="bg-green-600 hover:bg-green-700 text-white"
-                            onClick={() => openMsgModal(inst)}
-                            title="Enviar Mensagem"
+                            onClick={() => openQrModal(inst)}
+                            title="Conectar via QR Code"
                           >
-                            <MessageCircle className="h-4 w-4" />
+                            <QrCode className="h-4 w-4" />
                           </Button>
                         )}
                         <Button
@@ -307,26 +385,76 @@ export default function InstanciasPage() {
       </Card>
 
       {/* QR Code Modal */}
-      <Dialog open={qrOpen} onOpenChange={setQrOpen}>
-        <DialogContent>
+      <Dialog open={qrOpen} onOpenChange={(open) => { if (!open) closeQrModal(); }}>
+        <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>
-              Conectar &quot;{qrInstance?.name}&quot;
-            </DialogTitle>
+            <DialogTitle>Conectar WhatsApp</DialogTitle>
           </DialogHeader>
-          <div className="flex flex-col items-center gap-4 py-4">
-            <p className="text-sm text-muted-foreground text-center">
-              Escaneie o QR Code abaixo com o WhatsApp do celular para conectar esta instancia.
-            </p>
-            <div className="rounded-lg border border-border p-3 bg-white">
-              <QrCodePattern />
+
+          {qrConnected ? (
+            <div className="text-center py-8">
+              <div className="w-16 h-16 rounded-full bg-green-100 flex items-center justify-center mx-auto mb-4">
+                <MessageCircle className="h-8 w-8 text-green-600" />
+              </div>
+              <h3 className="text-lg font-bold text-green-600">Conectado!</h3>
+              <p className="text-sm text-muted-foreground mt-1">
+                WhatsApp vinculado com sucesso.
+              </p>
+              <Button className="mt-4" onClick={closeQrModal}>
+                Fechar
+              </Button>
             </div>
-          </div>
-          <DialogFooter>
-            <Button onClick={handleSimulateConnect} disabled={connecting}>
-              {connecting ? "Conectando..." : "Simular Conexao"}
-            </Button>
-          </DialogFooter>
+          ) : qrLoading ? (
+            <div className="text-center py-12">
+              <Loader2 className="h-8 w-8 animate-spin mx-auto mb-3 text-muted-foreground" />
+              <p className="text-sm text-muted-foreground">Gerando QR Code...</p>
+            </div>
+          ) : qrError ? (
+            <div className="text-center py-8">
+              <p className="text-sm text-destructive mb-4">{qrError}</p>
+              <Button variant="outline" onClick={refreshQr}>
+                <RefreshCw className="mr-2 h-4 w-4" />
+                Tentar novamente
+              </Button>
+            </div>
+          ) : (
+            <div className="flex flex-col items-center gap-4 py-4">
+              <p className="text-sm text-muted-foreground text-center">
+                Abra o <strong>WhatsApp</strong> no celular &gt; Menu &gt;{" "}
+                <strong>Aparelhos conectados</strong> &gt; Conectar um aparelho
+              </p>
+
+              {qrImage ? (
+                <div className="rounded-lg border border-border p-2 bg-white">
+                  <img
+                    src={qrImage}
+                    alt="QR Code WhatsApp"
+                    width={280}
+                    height={280}
+                    className="rounded"
+                  />
+                </div>
+              ) : (
+                <div className="rounded-lg border border-border p-8 bg-muted/30">
+                  <p className="text-sm text-muted-foreground">QR Code não disponível</p>
+                </div>
+              )}
+
+              <div className="flex gap-2 w-full">
+                <Button variant="outline" className="flex-1" onClick={refreshQr}>
+                  <RefreshCw className="mr-2 h-4 w-4" />
+                  Atualizar QR
+                </Button>
+                <Button variant="outline" className="flex-1" onClick={closeQrModal}>
+                  Cancelar
+                </Button>
+              </div>
+
+              <p className="text-xs text-muted-foreground text-center">
+                O QR Code expira em 60 segundos. Clique em &quot;Atualizar QR&quot; se necessário.
+              </p>
+            </div>
+          )}
         </DialogContent>
       </Dialog>
 

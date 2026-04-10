@@ -3,7 +3,7 @@ import { auth } from "@/lib/auth"
 import { db } from "@/lib/db"
 import * as evo from "@/lib/evolution"
 
-export async function DELETE(
+export async function PATCH(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
@@ -22,17 +22,19 @@ export async function DELETE(
     return NextResponse.json({ error: "Instance not found" }, { status: 404 })
   }
 
-  // Delete from Evolution API
   const configured = await evo.isConfigured()
   if (configured) {
     try {
-      await evo.deleteInstance(instance.name)
+      await evo.logoutInstance(instance.name)
     } catch {
-      // Ignore - instance might not exist in Evolution
+      // Ignore
     }
   }
 
-  await db.whatsAppInstance.delete({ where: { id } })
+  await db.whatsAppInstance.update({
+    where: { id },
+    data: { status: "disconnected", isActive: false },
+  })
 
   return NextResponse.json({ success: true })
 }

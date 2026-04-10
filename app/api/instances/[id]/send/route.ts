@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server"
 import { auth } from "@/lib/auth"
 import { db } from "@/lib/db"
+import * as evo from "@/lib/evolution"
 
 export async function POST(
   request: Request,
@@ -23,7 +24,7 @@ export async function POST(
 
   if (instance.status !== "connected") {
     return NextResponse.json(
-      { error: "Instance is not connected" },
+      { error: "Instância não está conectada" },
       { status: 400 }
     )
   }
@@ -32,18 +33,29 @@ export async function POST(
 
   if (!phone || !message) {
     return NextResponse.json(
-      { error: "Phone and message are required" },
+      { error: "Telefone e mensagem são obrigatórios" },
       { status: 400 }
     )
   }
 
-  console.log(`[Send] Instance: ${instance.name} | To: ${phone} | Message: ${message}`)
+  const configured = await evo.isConfigured()
+  if (configured) {
+    try {
+      await evo.sendText(instance.name, phone, message)
+    } catch (err: any) {
+      console.error("Send error:", err.message)
+      return NextResponse.json(
+        { error: "Erro ao enviar: " + err.message },
+        { status: 500 }
+      )
+    }
+  } else {
+    console.log(`[Mock Send] Instance: ${instance.name} | To: ${phone} | Message: ${message}`)
+  }
 
   await db.whatsAppInstance.update({
     where: { id },
-    data: {
-      messagesSent: { increment: 1 },
-    },
+    data: { messagesSent: { increment: 1 } },
   })
 
   return NextResponse.json({ success: true, phone, message })
