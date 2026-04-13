@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server"
 import { auth } from "@/lib/auth"
 import { db } from "@/lib/db"
-import * as evo from "@/lib/evolution"
+import { sendMessage } from "@/lib/whatsapp"
 
 export async function POST(
   request: Request,
@@ -13,44 +13,27 @@ export async function POST(
   }
 
   const { id } = await params
-
   const instance = await db.whatsAppInstance.findFirst({
     where: { id, userId: session.user.id },
   })
 
   if (!instance) {
-    return NextResponse.json({ error: "Instance not found" }, { status: 404 })
+    return NextResponse.json({ error: "Instância não encontrada" }, { status: 404 })
   }
 
   if (instance.status !== "connected") {
-    return NextResponse.json(
-      { error: "Instância não está conectada" },
-      { status: 400 }
-    )
+    return NextResponse.json({ error: "Instância não está conectada" }, { status: 400 })
   }
 
   const { phone, message } = await request.json()
-
   if (!phone || !message) {
-    return NextResponse.json(
-      { error: "Telefone e mensagem são obrigatórios" },
-      { status: 400 }
-    )
+    return NextResponse.json({ error: "Telefone e mensagem são obrigatórios" }, { status: 400 })
   }
 
-  const configured = await evo.isConfigured()
-  if (configured) {
-    try {
-      await evo.sendText(instance.name, phone, message)
-    } catch (err: any) {
-      console.error("Send error:", err.message)
-      return NextResponse.json(
-        { error: "Erro ao enviar: " + err.message },
-        { status: 500 }
-      )
-    }
-  } else {
-    console.log(`[Mock Send] Instance: ${instance.name} | To: ${phone} | Message: ${message}`)
+  const result = await sendMessage(instance, phone, message)
+
+  if (!result.success) {
+    return NextResponse.json({ error: result.error }, { status: 500 })
   }
 
   await db.whatsAppInstance.update({
@@ -58,5 +41,5 @@ export async function POST(
     data: { messagesSent: { increment: 1 } },
   })
 
-  return NextResponse.json({ success: true, phone, message })
+  return NextResponse.json({ success: true, messageId: result.messageId })
 }

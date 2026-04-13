@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server"
 import { auth } from "@/lib/auth"
 import { db } from "@/lib/db"
-import * as evo from "@/lib/evolution"
+import { testConnection } from "@/lib/whatsapp"
 
 export async function GET() {
   const session = await auth()
@@ -14,31 +14,6 @@ export async function GET() {
     orderBy: { createdAt: "desc" },
   })
 
-  // Sync status with Evolution API for each instance
-  const configured = await evo.isConfigured()
-  if (configured) {
-    for (const inst of instances) {
-      try {
-        const state = await evo.getConnectionState(inst.name)
-        const isOpen = state?.instance?.state === "open"
-        if (isOpen !== inst.isActive) {
-          await db.whatsAppInstance.update({
-            where: { id: inst.id },
-            data: {
-              status: isOpen ? "connected" : "disconnected",
-              isActive: isOpen,
-              phone: state?.instance?.owner || inst.phone,
-            },
-          })
-          inst.status = isOpen ? "connected" : "disconnected"
-          inst.isActive = isOpen
-        }
-      } catch {
-        // Instance might not exist in Evolution yet
-      }
-    }
-  }
-
   return NextResponse.json(instances)
 }
 
@@ -48,39 +23,34 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
   }
 
-  const { name } = await request.json()
-  if (!name) {
-    return NextResponse.json({ error: "Name is required" }, { status: 400 })
+  const body = await request.json()
+  const { name, provider, apiToken, apiUrl, instanceId, phoneNumberId, phone } = body
+
+  if (!name || !provider) {
+    return NextResponse.json({ error: "Nome e provider são obrigatórios" }, { status: 400 })
   }
 
-  // Sanitize instance name for Evolution API (no spaces/special chars)
-  const instanceName = name
-    .toLowerCase()
-    .replace(/[^a-z0-9]/g, "_")
-    .replace(/_+/g, "_")
-    .replace(/^_|_$/g, "") + "_" + Date.now().toString(36)
+  // Test connection before saving
+  const config = { provider, apiToken, apiUrl, instanceId, phoneNumberId, name }
+  const test = await testConnection(config)
 
-  // Create in Evolution API
-  const configured = await evo.isConfigured()
-  if (configured) {
-    try {
-      await evo.createInstance(instanceName)
-    } catch (err: any) {
-      console.error("Evolution create error:", err.message)
-      return NextResponse.json(
-        { error: "Erro ao criar instância no WhatsApp: " + err.message },
-        { status: 500 }
-      )
-    }
-  }
-
-  // Save in database
   const instance = await db.whatsAppInstance.create({
     data: {
-      name: instanceName,
+      name,
+      provider,
+      apiToken: apiToken || null,
+      apiUrl: apiUrl || null,
+      instanceId: instanceId || null,
+      phoneNumberId: phoneNumberId || null,
+      phone: test.phone || phone || null,
+      status: test.connected ? "connected" : "disconnected",
+      isActive: test.connected,
       userId: session.user.id,
     },
   })
 
-  return NextResponse.json(instance, { status: 201 })
+  return NextResponse.json({
+    ...instance,
+    connectionTest: test,
+  }, { status: 201 })
 }

@@ -1,60 +1,75 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback } from "react";
 import {
   Plus,
   Trash2,
-  QrCode,
   MessageCircle,
   Send,
   Loader2,
-  WifiOff,
   RefreshCw,
+  CheckCircle,
+  XCircle,
+  Plug,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
+import { Label } from "@/components/ui/label";
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
+  Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
 import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogFooter,
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
 
 interface Instance {
   id: string;
   name: string;
   phone?: string;
+  provider: string;
   status: "connected" | "disconnected";
   messagesSent: number;
 }
 
+const PROVIDERS = [
+  {
+    value: "meta",
+    label: "WhatsApp Cloud API (Meta)",
+    description: "API oficial do Meta/Facebook. Gratuita.",
+    fields: ["apiToken", "phoneNumberId"],
+  },
+  {
+    value: "zapi",
+    label: "Z-API",
+    description: "Provedor popular no Brasil. Pago.",
+    fields: ["instanceId", "apiToken"],
+  },
+  {
+    value: "evolution",
+    label: "Evolution API",
+    description: "Open source, self-hosted.",
+    fields: ["apiUrl", "apiToken"],
+  },
+];
+
 export default function InstanciasPage() {
   const [instances, setInstances] = useState<Instance[]>([]);
   const [loading, setLoading] = useState(true);
-  const [showCreateForm, setShowCreateForm] = useState(false);
-  const [newName, setNewName] = useState("");
+  const [showCreate, setShowCreate] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [testResult, setTestResult] = useState<{ connected: boolean; error?: string } | null>(null);
 
-  // QR Code modal
-  const [qrOpen, setQrOpen] = useState(false);
-  const [qrInstance, setQrInstance] = useState<Instance | null>(null);
-  const [qrImage, setQrImage] = useState<string | null>(null);
-  const [qrLoading, setQrLoading] = useState(false);
-  const [qrError, setQrError] = useState("");
-  const [qrConnected, setQrConnected] = useState(false);
-  const pollRef = useRef<NodeJS.Timeout | null>(null);
+  // Form fields
+  const [formName, setFormName] = useState("");
+  const [formProvider, setFormProvider] = useState("meta");
+  const [formApiToken, setFormApiToken] = useState("");
+  const [formApiUrl, setFormApiUrl] = useState("");
+  const [formInstanceId, setFormInstanceId] = useState("");
+  const [formPhoneNumberId, setFormPhoneNumberId] = useState("");
+  const [formPhone, setFormPhone] = useState("");
 
   // Send message modal
   const [msgOpen, setMsgOpen] = useState(false);
@@ -63,156 +78,90 @@ export default function InstanciasPage() {
   const [msgText, setMsgText] = useState("");
   const [sending, setSending] = useState(false);
 
+  // Reconnect
+  const [reconnecting, setReconnecting] = useState<string | null>(null);
+
   const fetchInstances = useCallback(async () => {
     try {
       const res = await fetch("/api/instances");
-      if (res.ok) {
-        const data = await res.json();
-        setInstances(data);
-      }
-    } catch {
-      // ignore
-    } finally {
-      setLoading(false);
-    }
+      if (res.ok) setInstances(await res.json());
+    } catch {} finally { setLoading(false); }
   }, []);
 
-  useEffect(() => {
-    fetchInstances();
-  }, [fetchInstances]);
+  useEffect(() => { fetchInstances(); }, [fetchInstances]);
 
-  // Cleanup polling on unmount
-  useEffect(() => {
-    return () => {
-      if (pollRef.current) clearInterval(pollRef.current);
-    };
-  }, []);
+  const selectedProvider = PROVIDERS.find((p) => p.value === formProvider);
+
+  function resetForm() {
+    setFormName("");
+    setFormProvider("meta");
+    setFormApiToken("");
+    setFormApiUrl("");
+    setFormInstanceId("");
+    setFormPhoneNumberId("");
+    setFormPhone("");
+    setTestResult(null);
+  }
 
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
-    if (!newName.trim()) return;
+    if (!formName.trim()) return;
     setCreating(true);
+    setTestResult(null);
+
     try {
       const res = await fetch("/api/instances", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ name: newName.trim() }),
+        body: JSON.stringify({
+          name: formName.trim(),
+          provider: formProvider,
+          apiToken: formApiToken || undefined,
+          apiUrl: formApiUrl || undefined,
+          instanceId: formInstanceId || undefined,
+          phoneNumberId: formPhoneNumberId || undefined,
+          phone: formPhone || undefined,
+        }),
       });
+      const data = await res.json();
+
       if (res.ok) {
-        const inst = await res.json();
-        setNewName("");
-        setShowCreateForm(false);
-        await fetchInstances();
-        // Auto-open QR modal
-        openQrModal(inst);
+        setTestResult(data.connectionTest);
+        if (data.connectionTest?.connected) {
+          setTimeout(() => {
+            resetForm();
+            setShowCreate(false);
+            fetchInstances();
+          }, 1500);
+        } else {
+          await fetchInstances();
+        }
       } else {
-        const data = await res.json();
-        alert(data.error || "Erro ao criar instância");
+        setTestResult({ connected: false, error: data.error });
       }
     } catch {
-      alert("Erro de conexão");
+      setTestResult({ connected: false, error: "Erro de conexão" });
     } finally {
       setCreating(false);
     }
   }
 
+  async function handleReconnect(id: string) {
+    setReconnecting(id);
+    try {
+      const res = await fetch(`/api/instances/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      if (res.ok) await fetchInstances();
+    } catch {} finally { setReconnecting(null); }
+  }
+
   async function handleDelete(id: string) {
     if (!confirm("Deseja remover esta instância?")) return;
-    try {
-      await fetch(`/api/instances/${id}`, { method: "DELETE" });
-      await fetchInstances();
-    } catch {
-      // ignore
-    }
-  }
-
-  async function handleDisconnect(id: string) {
-    try {
-      await fetch(`/api/instances/${id}/disconnect`, { method: "PATCH" });
-      await fetchInstances();
-    } catch {
-      // ignore
-    }
-  }
-
-  async function openQrModal(instance: Instance) {
-    setQrInstance(instance);
-    setQrImage(null);
-    setQrError("");
-    setQrConnected(false);
-    setQrOpen(true);
-    setQrLoading(true);
-
-    // Fetch QR code
-    try {
-      const res = await fetch(`/api/instances/${instance.id}/connect`);
-      const data = await res.json();
-
-      if (!res.ok) {
-        setQrError(data.error || "Erro ao gerar QR Code");
-        setQrLoading(false);
-        return;
-      }
-
-      if (data.status === "connected") {
-        setQrConnected(true);
-        setQrLoading(false);
-        await fetchInstances();
-        return;
-      }
-
-      if (data.qrcode) {
-        // Evolution API returns base64 with or without data:image prefix
-        const src = data.qrcode.startsWith("data:")
-          ? data.qrcode
-          : `data:image/png;base64,${data.qrcode}`;
-        setQrImage(src);
-      } else {
-        setQrError("QR Code não disponível. Tente novamente.");
-      }
-    } catch {
-      setQrError("Erro de conexão ao buscar QR Code");
-    } finally {
-      setQrLoading(false);
-    }
-
-    // Poll for connection status every 3 seconds
-    if (pollRef.current) clearInterval(pollRef.current);
-    pollRef.current = setInterval(async () => {
-      try {
-        const res = await fetch(`/api/instances/${instance.id}/connect`, {
-          method: "PATCH",
-        });
-        const data = await res.json();
-        if (data.status === "connected") {
-          setQrConnected(true);
-          if (pollRef.current) clearInterval(pollRef.current);
-          await fetchInstances();
-        }
-      } catch {
-        // ignore
-      }
-    }, 3000);
-  }
-
-  async function refreshQr() {
-    if (!qrInstance) return;
-    openQrModal(qrInstance);
-  }
-
-  function closeQrModal() {
-    if (pollRef.current) {
-      clearInterval(pollRef.current);
-      pollRef.current = null;
-    }
-    setQrOpen(false);
-  }
-
-  function openMsgModal(instance: Instance) {
-    setMsgInstance(instance);
-    setMsgPhone("");
-    setMsgText("");
-    setMsgOpen(true);
+    await fetch(`/api/instances/${id}`, { method: "DELETE" });
+    await fetchInstances();
   }
 
   async function handleSendMessage(e: React.FormEvent) {
@@ -232,12 +181,15 @@ export default function InstanciasPage() {
         const data = await res.json();
         alert(data.error || "Erro ao enviar");
       }
-    } catch {
-      alert("Erro de conexão");
-    } finally {
-      setSending(false);
-    }
+    } catch { alert("Erro de conexão"); }
+    finally { setSending(false); }
   }
+
+  const providerLabel: Record<string, string> = {
+    meta: "Meta Cloud",
+    zapi: "Z-API",
+    evolution: "Evolution",
+  };
 
   return (
     <div className="space-y-6">
@@ -245,55 +197,171 @@ export default function InstanciasPage() {
         <h1 className="text-2xl font-bold tracking-tight text-foreground">
           Instâncias WhatsApp
         </h1>
-        <Button onClick={() => setShowCreateForm(!showCreateForm)}>
+        <Button onClick={() => { setShowCreate(!showCreate); resetForm(); }}>
           <Plus className="mr-2 h-4 w-4" />
           Nova Instância
         </Button>
       </div>
 
-      {showCreateForm && (
+      {/* Create Form */}
+      {showCreate && (
         <Card>
           <CardHeader>
-            <CardTitle>Criar Instância</CardTitle>
+            <CardTitle>Conectar WhatsApp</CardTitle>
           </CardHeader>
           <CardContent>
-            <form onSubmit={handleCreate} className="flex items-end gap-4">
-              <div className="flex-1">
-                <label className="text-sm font-medium text-foreground mb-1.5 block">
-                  Nome da instância
-                </label>
-                <Input
-                  placeholder="Ex: Atendimento Principal"
-                  value={newName}
-                  onChange={(e) => setNewName(e.target.value)}
-                  required
-                />
+            <form onSubmit={handleCreate} className="space-y-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label>Nome da instância</Label>
+                  <Input
+                    placeholder="Ex: Atendimento Principal"
+                    value={formName}
+                    onChange={(e) => setFormName(e.target.value)}
+                    required
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Provedor</Label>
+                  <select
+                    value={formProvider}
+                    onChange={(e) => { setFormProvider(e.target.value); setTestResult(null); }}
+                    className="w-full h-10 px-3 rounded-md border border-input bg-background text-sm"
+                  >
+                    {PROVIDERS.map((p) => (
+                      <option key={p.value} value={p.value}>{p.label}</option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-muted-foreground">{selectedProvider?.description}</p>
+                </div>
               </div>
-              <Button type="submit" disabled={creating}>
-                {creating ? (
-                  <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Criando...</>
-                ) : (
-                  "Criar e Conectar"
+
+              {/* Dynamic fields based on provider */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {formProvider === "meta" && (
+                  <>
+                    <div className="space-y-2">
+                      <Label>Access Token</Label>
+                      <Input
+                        type="password"
+                        placeholder="Token do WhatsApp Business API"
+                        value={formApiToken}
+                        onChange={(e) => setFormApiToken(e.target.value)}
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        Meta Business Suite &gt; WhatsApp &gt; Configuração da API
+                      </p>
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Phone Number ID</Label>
+                      <Input
+                        placeholder="Ex: 123456789012345"
+                        value={formPhoneNumberId}
+                        onChange={(e) => setFormPhoneNumberId(e.target.value)}
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        ID do número no painel do Meta Business
+                      </p>
+                    </div>
+                  </>
                 )}
-              </Button>
-              <Button type="button" variant="outline" onClick={() => setShowCreateForm(false)}>
-                Cancelar
-              </Button>
+
+                {formProvider === "zapi" && (
+                  <>
+                    <div className="space-y-2">
+                      <Label>Instance ID</Label>
+                      <Input
+                        placeholder="ID da instância Z-API"
+                        value={formInstanceId}
+                        onChange={(e) => setFormInstanceId(e.target.value)}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Token</Label>
+                      <Input
+                        type="password"
+                        placeholder="Token da instância Z-API"
+                        value={formApiToken}
+                        onChange={(e) => setFormApiToken(e.target.value)}
+                      />
+                    </div>
+                  </>
+                )}
+
+                {formProvider === "evolution" && (
+                  <>
+                    <div className="space-y-2">
+                      <Label>URL do Servidor</Label>
+                      <Input
+                        placeholder="https://sua-evolution-api.com"
+                        value={formApiUrl}
+                        onChange={(e) => setFormApiUrl(e.target.value)}
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>API Key</Label>
+                      <Input
+                        type="password"
+                        placeholder="Chave de autenticação"
+                        value={formApiToken}
+                        onChange={(e) => setFormApiToken(e.target.value)}
+                      />
+                    </div>
+                  </>
+                )}
+
+                <div className="space-y-2">
+                  <Label>Número WhatsApp (opcional)</Label>
+                  <Input
+                    placeholder="5511999999999"
+                    value={formPhone}
+                    onChange={(e) => setFormPhone(e.target.value)}
+                  />
+                </div>
+              </div>
+
+              {/* Test result */}
+              {testResult && (
+                <div className={`flex items-center gap-2 p-3 rounded-lg text-sm ${
+                  testResult.connected
+                    ? "bg-green-50 text-green-700 border border-green-200"
+                    : "bg-red-50 text-red-700 border border-red-200"
+                }`}>
+                  {testResult.connected ? (
+                    <><CheckCircle className="h-4 w-4" /> Conectado com sucesso!</>
+                  ) : (
+                    <><XCircle className="h-4 w-4" /> {testResult.error || "Não foi possível conectar"}</>
+                  )}
+                </div>
+              )}
+
+              <div className="flex gap-2">
+                <Button type="submit" disabled={creating || !formName.trim()}>
+                  {creating ? (
+                    <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Testando conexão...</>
+                  ) : (
+                    <><Plug className="mr-2 h-4 w-4" /> Conectar</>
+                  )}
+                </Button>
+                <Button type="button" variant="outline" onClick={() => { setShowCreate(false); resetForm(); }}>
+                  Cancelar
+                </Button>
+              </div>
             </form>
           </CardContent>
         </Card>
       )}
 
+      {/* Instances Table */}
       <Card>
         <CardContent className="p-0">
           {loading ? (
             <div className="p-8 text-center text-muted-foreground">
               <Loader2 className="h-6 w-6 animate-spin mx-auto mb-2" />
-              Carregando...
             </div>
           ) : instances.length === 0 ? (
             <div className="p-12 text-center text-muted-foreground">
-              <QrCode className="h-10 w-10 mx-auto mb-3 opacity-30" />
+              <Plug className="h-10 w-10 mx-auto mb-3 opacity-30" />
               <p>Nenhuma instância cadastrada</p>
               <p className="text-xs mt-1">Clique em &quot;Nova Instância&quot; para conectar seu WhatsApp</p>
             </div>
@@ -302,8 +370,8 @@ export default function InstanciasPage() {
               <TableHeader>
                 <TableRow>
                   <TableHead className="w-12">#</TableHead>
-                  <TableHead className="w-12">Perfil</TableHead>
                   <TableHead>Nome</TableHead>
+                  <TableHead>Provedor</TableHead>
                   <TableHead>WhatsApp</TableHead>
                   <TableHead>Msgs Enviadas</TableHead>
                   <TableHead>Status</TableHead>
@@ -316,12 +384,10 @@ export default function InstanciasPage() {
                     <TableCell className="font-mono text-xs text-muted-foreground">
                       {index + 1}
                     </TableCell>
-                    <TableCell>
-                      <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary text-primary-foreground text-sm font-semibold">
-                        {inst.name.charAt(0).toUpperCase()}
-                      </div>
-                    </TableCell>
                     <TableCell className="font-medium">{inst.name}</TableCell>
+                    <TableCell>
+                      <Badge variant="outline">{providerLabel[inst.provider] || inst.provider}</Badge>
+                    </TableCell>
                     <TableCell className="text-muted-foreground font-mono text-sm">
                       {inst.phone || "—"}
                     </TableCell>
@@ -337,33 +403,32 @@ export default function InstanciasPage() {
                     </TableCell>
                     <TableCell>
                       <div className="flex items-center justify-end gap-2">
-                        {inst.status === "connected" ? (
-                          <>
-                            <Button
-                              size="sm"
-                              className="bg-green-600 hover:bg-green-700 text-white"
-                              onClick={() => openMsgModal(inst)}
-                              title="Enviar Mensagem"
-                            >
-                              <MessageCircle className="h-4 w-4" />
-                            </Button>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => handleDisconnect(inst.id)}
-                              title="Desconectar"
-                            >
-                              <WifiOff className="h-4 w-4" />
-                            </Button>
-                          </>
-                        ) : (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => handleReconnect(inst.id)}
+                          disabled={reconnecting === inst.id}
+                          title="Testar conexão"
+                        >
+                          {reconnecting === inst.id ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            <RefreshCw className="h-4 w-4" />
+                          )}
+                        </Button>
+                        {inst.status === "connected" && (
                           <Button
-                            variant="outline"
                             size="sm"
-                            onClick={() => openQrModal(inst)}
-                            title="Conectar via QR Code"
+                            className="bg-green-600 hover:bg-green-700 text-white"
+                            onClick={() => {
+                              setMsgInstance(inst);
+                              setMsgPhone("");
+                              setMsgText("");
+                              setMsgOpen(true);
+                            }}
+                            title="Enviar Mensagem"
                           >
-                            <QrCode className="h-4 w-4" />
+                            <MessageCircle className="h-4 w-4" />
                           </Button>
                         )}
                         <Button
@@ -384,93 +449,15 @@ export default function InstanciasPage() {
         </CardContent>
       </Card>
 
-      {/* QR Code Modal */}
-      <Dialog open={qrOpen} onOpenChange={(open) => { if (!open) closeQrModal(); }}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>Conectar WhatsApp</DialogTitle>
-          </DialogHeader>
-
-          {qrConnected ? (
-            <div className="text-center py-8">
-              <div className="w-16 h-16 rounded-full bg-green-100 flex items-center justify-center mx-auto mb-4">
-                <MessageCircle className="h-8 w-8 text-green-600" />
-              </div>
-              <h3 className="text-lg font-bold text-green-600">Conectado!</h3>
-              <p className="text-sm text-muted-foreground mt-1">
-                WhatsApp vinculado com sucesso.
-              </p>
-              <Button className="mt-4" onClick={closeQrModal}>
-                Fechar
-              </Button>
-            </div>
-          ) : qrLoading ? (
-            <div className="text-center py-12">
-              <Loader2 className="h-8 w-8 animate-spin mx-auto mb-3 text-muted-foreground" />
-              <p className="text-sm text-muted-foreground">Gerando QR Code...</p>
-            </div>
-          ) : qrError ? (
-            <div className="text-center py-8">
-              <p className="text-sm text-destructive mb-4">{qrError}</p>
-              <Button variant="outline" onClick={refreshQr}>
-                <RefreshCw className="mr-2 h-4 w-4" />
-                Tentar novamente
-              </Button>
-            </div>
-          ) : (
-            <div className="flex flex-col items-center gap-4 py-4">
-              <p className="text-sm text-muted-foreground text-center">
-                Abra o <strong>WhatsApp</strong> no celular &gt; Menu &gt;{" "}
-                <strong>Aparelhos conectados</strong> &gt; Conectar um aparelho
-              </p>
-
-              {qrImage ? (
-                <div className="rounded-lg border border-border p-2 bg-white">
-                  <img
-                    src={qrImage}
-                    alt="QR Code WhatsApp"
-                    width={280}
-                    height={280}
-                    className="rounded"
-                  />
-                </div>
-              ) : (
-                <div className="rounded-lg border border-border p-8 bg-muted/30">
-                  <p className="text-sm text-muted-foreground">QR Code não disponível</p>
-                </div>
-              )}
-
-              <div className="flex gap-2 w-full">
-                <Button variant="outline" className="flex-1" onClick={refreshQr}>
-                  <RefreshCw className="mr-2 h-4 w-4" />
-                  Atualizar QR
-                </Button>
-                <Button variant="outline" className="flex-1" onClick={closeQrModal}>
-                  Cancelar
-                </Button>
-              </div>
-
-              <p className="text-xs text-muted-foreground text-center">
-                O QR Code expira em 60 segundos. Clique em &quot;Atualizar QR&quot; se necessário.
-              </p>
-            </div>
-          )}
-        </DialogContent>
-      </Dialog>
-
       {/* Send Message Modal */}
       <Dialog open={msgOpen} onOpenChange={setMsgOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>
-              Enviar Mensagem — {msgInstance?.name}
-            </DialogTitle>
+            <DialogTitle>Enviar Mensagem — {msgInstance?.name}</DialogTitle>
           </DialogHeader>
           <form onSubmit={handleSendMessage} className="space-y-4">
-            <div>
-              <label className="text-sm font-medium text-foreground mb-1.5 block">
-                Telefone
-              </label>
+            <div className="space-y-2">
+              <Label>Telefone</Label>
               <Input
                 placeholder="5511999999999"
                 value={msgPhone}
@@ -478,10 +465,8 @@ export default function InstanciasPage() {
                 required
               />
             </div>
-            <div>
-              <label className="text-sm font-medium text-foreground mb-1.5 block">
-                Mensagem
-              </label>
+            <div className="space-y-2">
+              <Label>Mensagem</Label>
               <Textarea
                 placeholder="Digite sua mensagem..."
                 value={msgText}

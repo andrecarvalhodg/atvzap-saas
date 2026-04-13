@@ -83,6 +83,11 @@ model WhatsAppInstance {
   userId       String   @map("user_id")
   name         String
   phone        String?
+  provider     String   @default("meta") // meta, zapi, evolution
+  apiToken     String?  @map("api_token")
+  apiUrl       String?  @map("api_url")
+  instanceId   String?  @map("instance_id") // for Z-API
+  phoneNumberId String? @map("phone_number_id") // for Meta Cloud API
   status       String   @default("disconnected")
   messagesSent Int      @default(0) @map("messages_sent")
   isActive     Boolean  @default(false) @map("is_active")
