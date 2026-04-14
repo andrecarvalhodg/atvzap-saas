@@ -53,7 +53,7 @@ interface WebhookConfig {
 }
 
 const PLATFORMS = ["Doppus", "Kiwify", "Hotmart"];
-const EVENTS = ["Compra Aprovada", "Reembolso", "Cancelamento"];
+const EVENTS = ["Compra Aprovada", "PIX Gerado", "Reembolso", "Cancelamento"];
 const WEBHOOK_BASE_URL = "https://atvzap-saas.vercel.app/api/webhook";
 
 export default function WebhooksPage() {
