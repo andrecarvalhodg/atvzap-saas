@@ -20,8 +20,8 @@ interface ConnectionTest {
 
 function getEvolutionServerConfig() {
   return {
-    apiUrl: (process.env.EVOLUTION_API_URL || "").replace(/\/$/, ""),
-    apiKey: process.env.EVOLUTION_API_KEY || "",
+    apiUrl: (process.env.EVOLUTION_API_URL || "").trim().replace(/\/+$/, ""),
+    apiKey: (process.env.EVOLUTION_API_KEY || "").trim(),
   }
 }
 
