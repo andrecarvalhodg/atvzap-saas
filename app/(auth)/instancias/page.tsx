@@ -174,9 +174,9 @@ export default function InstanciasPage() {
       const data = await res.json();
 
       if (res.ok) {
-        // Evolution API: show QR code modal
-        if (formProvider === "evolution" && data.qrcode) {
-          setQrCode(data.qrcode);
+        // Evolution API: always show QR code modal
+        if (formProvider === "evolution") {
+          setQrCode(data.qrcode || null);
           setQrInstanceId(data.id);
           setQrStatus("waiting");
           setQrOpen(true);

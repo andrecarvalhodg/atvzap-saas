@@ -190,7 +190,7 @@ export async function createEvolutionInstance(instanceName: string): Promise<{
     return { success: false, error: "Evolution API não configurada no servidor" }
   }
   try {
-    // Create instance
+    // Create instance (qrcode: true returns QR in the same response)
     const createRes = await fetch(`${apiUrl}/instance/create`, {
       method: "POST",
       headers: {
@@ -204,17 +204,31 @@ export async function createEvolutionInstance(instanceName: string): Promise<{
       }),
     })
     const createData = await createRes.json()
+
+    // If instance already exists (409), just get QR from connect endpoint
     if (!createRes.ok && createRes.status !== 409) {
       return { success: false, error: createData.message || "Erro ao criar instância" }
     }
 
-    // Get QR code
-    await new Promise((r) => setTimeout(r, 1000))
+    // Try QR from create response first
+    const qrcodeFromCreate =
+      createData?.qrcode?.base64 ||
+      createData?.qrcode?.code ||
+      createData?.base64
+
+    if (qrcodeFromCreate) {
+      return { success: true, qrcode: qrcodeFromCreate }
+    }
+
+    // Fallback: call connect endpoint
     const qrRes = await fetch(`${apiUrl}/instance/connect/${instanceName}`, {
       headers: { apikey: apiKey },
     })
     const qrData = await qrRes.json()
-    const qrcode = qrData.base64 || qrData.qrcode?.base64 || qrData.code
+    const qrcode =
+      qrData?.base64 ||
+      qrData?.qrcode?.base64 ||
+      qrData?.code
 
     return { success: true, qrcode }
   } catch (err: any) {
