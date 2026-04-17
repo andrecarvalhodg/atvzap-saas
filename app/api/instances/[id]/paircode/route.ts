@@ -26,28 +26,35 @@ export async function POST(
 
   const apiUrl = (process.env.EVOLUTION_API_URL || "").trim().replace(/\/+$/, "")
   const apiKey = (process.env.EVOLUTION_API_KEY || "").trim()
-
-  // Clean phone number
   const cleanPhone = phone.replace(/\D/g, "")
 
   try {
-    const res = await fetch(
-      `${apiUrl}/instance/connect/${instance.name}?number=${cleanPhone}`,
-      { headers: { apikey: apiKey } }
-    )
+    // Evolution API v1.x pairing code endpoint
+    const res = await fetch(`${apiUrl}/instance/pairingCode/${instance.name}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        apikey: apiKey,
+      },
+      body: JSON.stringify({ number: cleanPhone }),
+    })
     const data = await res.json()
 
-    // Pairing code is in data.code or data.pairingCode
-    const code = data.code || data.pairingCode || data.pairing_code
+    // Debug: return raw data so we can see what comes back
+    const code = data?.pairingCode || data?.code || data?.pairing_code
 
-    if (!code) {
-      return NextResponse.json({
-        error: "Não foi possível gerar o código. Tente novamente.",
-        raw: data,
-      }, { status: 500 })
+    // If the code looks like a QR string (long, contains @), it's wrong
+    if (code && code.length <= 12 && !code.includes("@")) {
+      return NextResponse.json({ code })
     }
 
-    return NextResponse.json({ code })
+    // Return raw data for debugging
+    return NextResponse.json({
+      error: "Formato de código inválido. Verifique os logs.",
+      raw: data,
+      status: res.status,
+    }, { status: 500 })
+
   } catch (err: any) {
     return NextResponse.json({ error: err.message }, { status: 500 })
   }
