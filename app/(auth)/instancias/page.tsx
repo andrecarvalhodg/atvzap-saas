@@ -12,6 +12,7 @@ import {
   XCircle,
   Plug,
   QrCode,
+  Smartphone,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -79,6 +80,15 @@ export default function InstanciasPage() {
   const [qrStatus, setQrStatus] = useState<"waiting" | "connected" | "error">("waiting");
   const qrPollRef = useRef<NodeJS.Timeout | null>(null);
 
+  // Pairing code modal
+  const [pairOpen, setPairOpen] = useState(false);
+  const [pairInstanceId, setPairInstanceId] = useState<string | null>(null);
+  const [pairPhone, setPairPhone] = useState("");
+  const [pairCode, setPairCode] = useState<string | null>(null);
+  const [pairLoading, setPairLoading] = useState(false);
+  const [pairError, setPairError] = useState<string | null>(null);
+  const pairPollRef = useRef<NodeJS.Timeout | null>(null);
+
   // Send message modal
   const [msgOpen, setMsgOpen] = useState(false);
   const [msgInstance, setMsgInstance] = useState<Instance | null>(null);
@@ -98,10 +108,11 @@ export default function InstanciasPage() {
 
   useEffect(() => { fetchInstances(); }, [fetchInstances]);
 
-  // Stop QR polling when component unmounts
+  // Stop polling when component unmounts
   useEffect(() => {
     return () => {
       if (qrPollRef.current) clearInterval(qrPollRef.current);
+      if (pairPollRef.current) clearInterval(pairPollRef.current);
     };
   }, []);
 
@@ -220,7 +231,6 @@ export default function InstanciasPage() {
   }
 
   async function handleShowQR(inst: Instance) {
-    // Re-open QR code for disconnected Evolution instances
     try {
       const res = await fetch(`/api/instances/${inst.id}/qrcode`);
       const data = await res.json();
@@ -232,6 +242,64 @@ export default function InstanciasPage() {
         startQrPolling(inst.id);
       }
     } catch {}
+  }
+
+  function stopPairPolling() {
+    if (pairPollRef.current) {
+      clearInterval(pairPollRef.current);
+      pairPollRef.current = null;
+    }
+  }
+
+  function startPairPolling(instanceId: string) {
+    stopPairPolling();
+    pairPollRef.current = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/instances/${instanceId}/qrcode`);
+        const data = await res.json();
+        if (data.state === "connected") {
+          stopPairPolling();
+          setPairOpen(false);
+          setPairCode(null);
+          setPairPhone("");
+          setPairInstanceId(null);
+          fetchInstances();
+        }
+      } catch {}
+    }, 4000);
+  }
+
+  async function handleRequestPairCode() {
+    if (!pairInstanceId || !pairPhone.trim()) return;
+    setPairLoading(true);
+    setPairError(null);
+    setPairCode(null);
+    try {
+      const res = await fetch(`/api/instances/${pairInstanceId}/paircode`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ phone: pairPhone.trim() }),
+      });
+      const data = await res.json();
+      if (data.code) {
+        setPairCode(data.code);
+        startPairPolling(pairInstanceId);
+      } else {
+        setPairError(data.error || "Erro ao gerar código");
+      }
+    } catch {
+      setPairError("Erro de conexão");
+    } finally {
+      setPairLoading(false);
+    }
+  }
+
+  async function handleShowPair(inst: Instance) {
+    setPairInstanceId(inst.id);
+    setPairPhone("");
+    setPairCode(null);
+    setPairError(null);
+    setPairOpen(true);
   }
 
   async function handleDelete(id: string) {
@@ -316,12 +384,11 @@ export default function InstanciasPage() {
               {/* Evolution API: no extra fields needed */}
               {formProvider === "evolution" && (
                 <div className="flex items-start gap-3 p-4 bg-green-50 border border-green-200 rounded-lg text-sm text-green-800">
-                  <QrCode className="h-5 w-5 mt-0.5 flex-shrink-0" />
+                  <Smartphone className="h-5 w-5 mt-0.5 flex-shrink-0" />
                   <div>
-                    <p className="font-medium">Conexão via QR Code</p>
+                    <p className="font-medium">Conexão via QR Code ou Código de Pareamento</p>
                     <p className="mt-1 text-green-700">
-                      Após clicar em &quot;Gerar QR Code&quot;, um código aparecerá na tela.
-                      Abra o WhatsApp no celular → Menu → Dispositivos conectados → Conectar dispositivo → Escaneie o código.
+                      Após criar a instância, você pode conectar via <strong>QR Code</strong> (📱 ícone) ou via <strong>Código de Pareamento</strong> (🔢 ícone) — recomendado para WhatsApp Business.
                     </p>
                   </div>
                 </div>
@@ -476,16 +543,26 @@ export default function InstanciasPage() {
                     </TableCell>
                     <TableCell>
                       <div className="flex items-center justify-end gap-2">
-                        {/* Evolution API disconnected: show QR button */}
+                        {/* Evolution API disconnected: show QR + Pair buttons */}
                         {inst.provider === "evolution" && inst.status !== "connected" ? (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => handleShowQR(inst)}
-                            title="Reconectar via QR Code"
-                          >
-                            <QrCode className="h-4 w-4" />
-                          </Button>
+                          <>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => handleShowQR(inst)}
+                              title="Conectar via QR Code"
+                            >
+                              <QrCode className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => handleShowPair(inst)}
+                              title="Conectar via Código (recomendado para WhatsApp Business)"
+                            >
+                              <Smartphone className="h-4 w-4" />
+                            </Button>
+                          </>
                         ) : inst.provider !== "evolution" ? (
                           <Button
                             variant="outline"
@@ -581,6 +658,73 @@ export default function InstanciasPage() {
               <div className="flex flex-col items-center gap-3">
                 <Loader2 className="h-10 w-10 animate-spin text-muted-foreground" />
                 <p className="text-sm text-muted-foreground">Gerando QR Code...</p>
+              </div>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Pairing Code Modal */}
+      <Dialog open={pairOpen} onOpenChange={(open) => {
+        if (!open) { stopPairPolling(); setPairOpen(false); setPairCode(null); setPairPhone(""); }
+      }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Smartphone className="h-5 w-5" />
+              Conectar via Código
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="text-sm text-muted-foreground space-y-1">
+              <p className="font-medium text-foreground">Como funciona:</p>
+              <p>1. Digite seu número com DDD</p>
+              <p>2. Um código de 8 letras vai aparecer</p>
+              <p>3. No WhatsApp: <strong>⋮ → Dispositivos conectados → Vincular com número de telefone</strong></p>
+              <p>4. Digite o código mostrado aqui</p>
+            </div>
+
+            {!pairCode ? (
+              <div className="space-y-3">
+                <div className="space-y-2">
+                  <Label>Seu número WhatsApp</Label>
+                  <Input
+                    placeholder="5537999437698"
+                    value={pairPhone}
+                    onChange={(e) => setPairPhone(e.target.value.replace(/\D/g, ""))}
+                  />
+                  <p className="text-xs text-muted-foreground">55 + DDD + número (só números)</p>
+                </div>
+                {pairError && (
+                  <div className="flex items-center gap-2 p-3 bg-red-50 text-red-700 border border-red-200 rounded-lg text-sm">
+                    <XCircle className="h-4 w-4 flex-shrink-0" />
+                    {pairError}
+                  </div>
+                )}
+                <Button
+                  className="w-full"
+                  onClick={handleRequestPairCode}
+                  disabled={pairLoading || !pairPhone.trim()}
+                >
+                  {pairLoading ? (
+                    <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Gerando código...</>
+                  ) : (
+                    <><Smartphone className="mr-2 h-4 w-4" /> Gerar Código</>
+                  )}
+                </Button>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div className="text-center">
+                  <p className="text-sm text-muted-foreground mb-2">Digite este código no WhatsApp:</p>
+                  <div className="text-4xl font-mono font-bold tracking-[0.3em] bg-muted rounded-lg py-4 px-2 text-center">
+                    {pairCode}
+                  </div>
+                </div>
+                <div className="flex items-center justify-center gap-2 text-xs text-muted-foreground">
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                  Aguardando conexão...
+                </div>
               </div>
             )}
           </div>
