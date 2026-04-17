@@ -27,33 +27,59 @@ export async function POST(
   const apiUrl = (process.env.EVOLUTION_API_URL || "").trim().replace(/\/+$/, "")
   const apiKey = (process.env.EVOLUTION_API_KEY || "").trim()
   const cleanPhone = phone.replace(/\D/g, "")
+  const instanceName = instance.name
+  const instanceToken = `${instanceName}-token`
 
   try {
-    // Evolution API v1.x: pairing code via connect endpoint with number param
-    const res = await fetch(
-      `${apiUrl}/instance/connect/${instance.name}?number=${cleanPhone}`,
-      {
-        method: "GET",
-        headers: { apikey: apiKey },
-      }
+    // Step 1: Delete existing instance (it's stuck in QR mode)
+    await fetch(`${apiUrl}/instance/logout/${instanceName}`, {
+      method: "DELETE",
+      headers: { apikey: apiKey },
+    })
+    await new Promise(r => setTimeout(r, 500))
+
+    await fetch(`${apiUrl}/instance/delete/${instanceName}`, {
+      method: "DELETE",
+      headers: { apikey: apiKey },
+    })
+    await new Promise(r => setTimeout(r, 1000))
+
+    // Step 2: Recreate instance with qrcode: false to enable pairing code mode
+    const createRes = await fetch(`${apiUrl}/instance/create`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", apikey: apiKey },
+      body: JSON.stringify({
+        instanceName,
+        token: instanceToken,
+        qrcode: false, // IMPORTANT: disable QR to allow pairing code
+        number: cleanPhone,
+      }),
+    })
+    const createData = await createRes.json()
+
+    await new Promise(r => setTimeout(r, 1500))
+
+    // Step 3: Request pairing code
+    const connectRes = await fetch(
+      `${apiUrl}/instance/connect/${instanceName}?number=${cleanPhone}`,
+      { headers: { apikey: apiKey } }
     )
-    const data = await res.json()
+    const connectData = await connectRes.json()
 
-    // v1.x returns pairingCode field when number is provided
-    const code = data?.pairingCode || data?.pairing_code || data?.code
+    const code = connectData?.pairingCode
 
-    // Valid pairing code: 8 chars like "ABCD-EFGH" or "ABCDEFGH"
-    if (code && typeof code === "string" && code.length >= 4 && code.length <= 12 && !code.startsWith("data:") && !code.includes("@")) {
+    if (code && typeof code === "string" && code.length >= 4) {
       return NextResponse.json({ code })
     }
 
-    // Return raw for debugging
+    // Still null? Return debug info
     return NextResponse.json({
-      error: "Código não encontrado na resposta",
-      httpStatus: res.status,
-      keys: Object.keys(data),
-      raw: data,
-    })
+      error: "Código não gerado. Tente novamente em alguns segundos.",
+      createStatus: createRes.status,
+      connectStatus: connectRes.status,
+      pairingCode: connectData?.pairingCode,
+      keys: Object.keys(connectData),
+    }, { status: 500 })
 
   } catch (err: any) {
     return NextResponse.json({ error: err.message }, { status: 500 })
