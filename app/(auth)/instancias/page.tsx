@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   Plus,
   Trash2,
@@ -11,6 +11,7 @@ import {
   CheckCircle,
   XCircle,
   Plug,
+  QrCode,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -36,9 +37,15 @@ interface Instance {
 
 const PROVIDERS = [
   {
+    value: "evolution",
+    label: "Evolution API (QR Code) ✓ Recomendado",
+    description: "Conecte seu WhatsApp pessoal escaneando um QR Code. Gratuito.",
+    fields: [],
+  },
+  {
     value: "meta",
     label: "WhatsApp Cloud API (Meta)",
-    description: "API oficial do Meta/Facebook. Gratuita.",
+    description: "API oficial do Meta/Facebook. Requer número dedicado.",
     fields: ["apiToken", "phoneNumberId"],
   },
   {
@@ -46,12 +53,6 @@ const PROVIDERS = [
     label: "Z-API",
     description: "Provedor popular no Brasil. Pago.",
     fields: ["instanceId", "apiToken"],
-  },
-  {
-    value: "evolution",
-    label: "Evolution API",
-    description: "Open source, self-hosted.",
-    fields: ["apiUrl", "apiToken"],
   },
 ];
 
@@ -64,12 +65,19 @@ export default function InstanciasPage() {
 
   // Form fields
   const [formName, setFormName] = useState("");
-  const [formProvider, setFormProvider] = useState("meta");
+  const [formProvider, setFormProvider] = useState("evolution");
   const [formApiToken, setFormApiToken] = useState("");
   const [formApiUrl, setFormApiUrl] = useState("");
   const [formInstanceId, setFormInstanceId] = useState("");
   const [formPhoneNumberId, setFormPhoneNumberId] = useState("");
   const [formPhone, setFormPhone] = useState("");
+
+  // QR Code modal
+  const [qrOpen, setQrOpen] = useState(false);
+  const [qrCode, setQrCode] = useState<string | null>(null);
+  const [qrInstanceId, setQrInstanceId] = useState<string | null>(null);
+  const [qrStatus, setQrStatus] = useState<"waiting" | "connected" | "error">("waiting");
+  const qrPollRef = useRef<NodeJS.Timeout | null>(null);
 
   // Send message modal
   const [msgOpen, setMsgOpen] = useState(false);
@@ -90,17 +98,57 @@ export default function InstanciasPage() {
 
   useEffect(() => { fetchInstances(); }, [fetchInstances]);
 
+  // Stop QR polling when component unmounts
+  useEffect(() => {
+    return () => {
+      if (qrPollRef.current) clearInterval(qrPollRef.current);
+    };
+  }, []);
+
   const selectedProvider = PROVIDERS.find((p) => p.value === formProvider);
 
   function resetForm() {
     setFormName("");
-    setFormProvider("meta");
+    setFormProvider("evolution");
     setFormApiToken("");
     setFormApiUrl("");
     setFormInstanceId("");
     setFormPhoneNumberId("");
     setFormPhone("");
     setTestResult(null);
+  }
+
+  function stopQrPolling() {
+    if (qrPollRef.current) {
+      clearInterval(qrPollRef.current);
+      qrPollRef.current = null;
+    }
+  }
+
+  function startQrPolling(instanceId: string) {
+    stopQrPolling();
+    qrPollRef.current = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/instances/${instanceId}/qrcode`);
+        const data = await res.json();
+
+        if (data.state === "connected") {
+          setQrStatus("connected");
+          stopQrPolling();
+          setTimeout(() => {
+            setQrOpen(false);
+            setQrCode(null);
+            setQrInstanceId(null);
+            setQrStatus("waiting");
+            resetForm();
+            setShowCreate(false);
+            fetchInstances();
+          }, 2000);
+        } else if (data.qrcode) {
+          setQrCode(data.qrcode);
+        }
+      } catch {}
+    }, 3000);
   }
 
   async function handleCreate(e: React.FormEvent) {
@@ -126,15 +174,25 @@ export default function InstanciasPage() {
       const data = await res.json();
 
       if (res.ok) {
-        setTestResult(data.connectionTest);
-        if (data.connectionTest?.connected) {
-          setTimeout(() => {
-            resetForm();
-            setShowCreate(false);
-            fetchInstances();
-          }, 1500);
-        } else {
+        // Evolution API: show QR code modal
+        if (formProvider === "evolution" && data.qrcode) {
+          setQrCode(data.qrcode);
+          setQrInstanceId(data.id);
+          setQrStatus("waiting");
+          setQrOpen(true);
+          startQrPolling(data.id);
           await fetchInstances();
+        } else {
+          setTestResult(data.connectionTest);
+          if (data.connectionTest?.connected) {
+            setTimeout(() => {
+              resetForm();
+              setShowCreate(false);
+              fetchInstances();
+            }, 1500);
+          } else {
+            await fetchInstances();
+          }
         }
       } else {
         setTestResult({ connected: false, error: data.error });
@@ -156,6 +214,21 @@ export default function InstanciasPage() {
       });
       if (res.ok) await fetchInstances();
     } catch {} finally { setReconnecting(null); }
+  }
+
+  async function handleShowQR(inst: Instance) {
+    // Re-open QR code for disconnected Evolution instances
+    try {
+      const res = await fetch(`/api/instances/${inst.id}/qrcode`);
+      const data = await res.json();
+      if (data.qrcode) {
+        setQrCode(data.qrcode);
+        setQrInstanceId(inst.id);
+        setQrStatus("waiting");
+        setQrOpen(true);
+        startQrPolling(inst.id);
+      }
+    } catch {}
   }
 
   async function handleDelete(id: string) {
@@ -215,11 +288,12 @@ export default function InstanciasPage() {
                 <div className="space-y-2">
                   <Label>Nome da instância</Label>
                   <Input
-                    placeholder="Ex: Atendimento Principal"
+                    placeholder="Ex: Atendimento_Principal"
                     value={formName}
-                    onChange={(e) => setFormName(e.target.value)}
+                    onChange={(e) => setFormName(e.target.value.replace(/\s+/g, "_"))}
                     required
                   />
+                  <p className="text-xs text-muted-foreground">Sem espaços. Use _ ao invés de espaço.</p>
                 </div>
                 <div className="space-y-2">
                   <Label>Provedor</Label>
@@ -236,89 +310,83 @@ export default function InstanciasPage() {
                 </div>
               </div>
 
-              {/* Dynamic fields based on provider */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {formProvider === "meta" && (
-                  <>
-                    <div className="space-y-2">
-                      <Label>Access Token</Label>
-                      <Input
-                        type="password"
-                        placeholder="Token do WhatsApp Business API"
-                        value={formApiToken}
-                        onChange={(e) => setFormApiToken(e.target.value)}
-                      />
-                      <p className="text-xs text-muted-foreground">
-                        Meta Business Suite &gt; WhatsApp &gt; Configuração da API
-                      </p>
-                    </div>
-                    <div className="space-y-2">
-                      <Label>Phone Number ID</Label>
-                      <Input
-                        placeholder="Ex: 123456789012345"
-                        value={formPhoneNumberId}
-                        onChange={(e) => setFormPhoneNumberId(e.target.value)}
-                      />
-                      <p className="text-xs text-muted-foreground">
-                        ID do número no painel do Meta Business
-                      </p>
-                    </div>
-                  </>
-                )}
-
-                {formProvider === "zapi" && (
-                  <>
-                    <div className="space-y-2">
-                      <Label>Instance ID</Label>
-                      <Input
-                        placeholder="ID da instância Z-API"
-                        value={formInstanceId}
-                        onChange={(e) => setFormInstanceId(e.target.value)}
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label>Token</Label>
-                      <Input
-                        type="password"
-                        placeholder="Token da instância Z-API"
-                        value={formApiToken}
-                        onChange={(e) => setFormApiToken(e.target.value)}
-                      />
-                    </div>
-                  </>
-                )}
-
-                {formProvider === "evolution" && (
-                  <>
-                    <div className="space-y-2">
-                      <Label>URL do Servidor</Label>
-                      <Input
-                        placeholder="https://sua-evolution-api.com"
-                        value={formApiUrl}
-                        onChange={(e) => setFormApiUrl(e.target.value)}
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label>API Key</Label>
-                      <Input
-                        type="password"
-                        placeholder="Chave de autenticação"
-                        value={formApiToken}
-                        onChange={(e) => setFormApiToken(e.target.value)}
-                      />
-                    </div>
-                  </>
-                )}
-
-                <div className="space-y-2">
-                  <Label>Número WhatsApp (opcional)</Label>
-                  <Input
-                    placeholder="5511999999999"
-                    value={formPhone}
-                    onChange={(e) => setFormPhone(e.target.value)}
-                  />
+              {/* Evolution API: no extra fields needed */}
+              {formProvider === "evolution" && (
+                <div className="flex items-start gap-3 p-4 bg-green-50 border border-green-200 rounded-lg text-sm text-green-800">
+                  <QrCode className="h-5 w-5 mt-0.5 flex-shrink-0" />
+                  <div>
+                    <p className="font-medium">Conexão via QR Code</p>
+                    <p className="mt-1 text-green-700">
+                      Após clicar em &quot;Gerar QR Code&quot;, um código aparecerá na tela.
+                      Abra o WhatsApp no celular → Menu → Dispositivos conectados → Conectar dispositivo → Escaneie o código.
+                    </p>
+                  </div>
                 </div>
-              </div>
+              )}
+
+              {/* Dynamic fields for other providers */}
+              {formProvider !== "evolution" && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {formProvider === "meta" && (
+                    <>
+                      <div className="space-y-2">
+                        <Label>Access Token</Label>
+                        <Input
+                          type="password"
+                          placeholder="Token do WhatsApp Business API"
+                          value={formApiToken}
+                          onChange={(e) => setFormApiToken(e.target.value)}
+                        />
+                        <p className="text-xs text-muted-foreground">
+                          Meta Business Suite &gt; WhatsApp &gt; Configuração da API
+                        </p>
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Phone Number ID</Label>
+                        <Input
+                          placeholder="Ex: 123456789012345"
+                          value={formPhoneNumberId}
+                          onChange={(e) => setFormPhoneNumberId(e.target.value)}
+                        />
+                        <p className="text-xs text-muted-foreground">
+                          ID do número no painel do Meta Business
+                        </p>
+                      </div>
+                    </>
+                  )}
+
+                  {formProvider === "zapi" && (
+                    <>
+                      <div className="space-y-2">
+                        <Label>Instance ID</Label>
+                        <Input
+                          placeholder="ID da instância Z-API"
+                          value={formInstanceId}
+                          onChange={(e) => setFormInstanceId(e.target.value)}
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label>Token</Label>
+                        <Input
+                          type="password"
+                          placeholder="Token da instância Z-API"
+                          value={formApiToken}
+                          onChange={(e) => setFormApiToken(e.target.value)}
+                        />
+                      </div>
+                    </>
+                  )}
+
+                  <div className="space-y-2">
+                    <Label>Número WhatsApp (opcional)</Label>
+                    <Input
+                      placeholder="5511999999999"
+                      value={formPhone}
+                      onChange={(e) => setFormPhone(e.target.value)}
+                    />
+                  </div>
+                </div>
+              )}
 
               {/* Test result */}
               {testResult && (
@@ -338,7 +406,9 @@ export default function InstanciasPage() {
               <div className="flex gap-2">
                 <Button type="submit" disabled={creating || !formName.trim()}>
                   {creating ? (
-                    <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Testando conexão...</>
+                    <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Aguarde...</>
+                  ) : formProvider === "evolution" ? (
+                    <><QrCode className="mr-2 h-4 w-4" /> Gerar QR Code</>
                   ) : (
                     <><Plug className="mr-2 h-4 w-4" /> Conectar</>
                   )}
@@ -403,19 +473,32 @@ export default function InstanciasPage() {
                     </TableCell>
                     <TableCell>
                       <div className="flex items-center justify-end gap-2">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => handleReconnect(inst.id)}
-                          disabled={reconnecting === inst.id}
-                          title="Testar conexão"
-                        >
-                          {reconnecting === inst.id ? (
-                            <Loader2 className="h-4 w-4 animate-spin" />
-                          ) : (
-                            <RefreshCw className="h-4 w-4" />
-                          )}
-                        </Button>
+                        {/* Evolution API disconnected: show QR button */}
+                        {inst.provider === "evolution" && inst.status !== "connected" ? (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => handleShowQR(inst)}
+                            title="Reconectar via QR Code"
+                          >
+                            <QrCode className="h-4 w-4" />
+                          </Button>
+                        ) : inst.provider !== "evolution" ? (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => handleReconnect(inst.id)}
+                            disabled={reconnecting === inst.id}
+                            title="Testar conexão"
+                          >
+                            {reconnecting === inst.id ? (
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                            ) : (
+                              <RefreshCw className="h-4 w-4" />
+                            )}
+                          </Button>
+                        ) : null}
+
                         {inst.status === "connected" && (
                           <Button
                             size="sm"
@@ -448,6 +531,58 @@ export default function InstanciasPage() {
           )}
         </CardContent>
       </Card>
+
+      {/* QR Code Modal */}
+      <Dialog open={qrOpen} onOpenChange={(open) => {
+        if (!open) {
+          stopQrPolling();
+          setQrOpen(false);
+          setQrCode(null);
+          setQrStatus("waiting");
+        }
+      }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <QrCode className="h-5 w-5" />
+              Escaneie o QR Code
+            </DialogTitle>
+          </DialogHeader>
+          <div className="flex flex-col items-center space-y-4 py-4">
+            {qrStatus === "connected" ? (
+              <div className="flex flex-col items-center gap-3 text-green-600">
+                <CheckCircle className="h-16 w-16" />
+                <p className="font-semibold text-lg">WhatsApp Conectado!</p>
+                <p className="text-sm text-muted-foreground">Fechando automaticamente...</p>
+              </div>
+            ) : qrCode ? (
+              <>
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={qrCode.startsWith("data:") ? qrCode : `data:image/png;base64,${qrCode}`}
+                  alt="QR Code WhatsApp"
+                  className="w-64 h-64 rounded-lg border"
+                />
+                <div className="text-center space-y-1">
+                  <p className="text-sm font-medium">Abra o WhatsApp no celular</p>
+                  <p className="text-xs text-muted-foreground">
+                    Menu (⋮) → Dispositivos conectados → Conectar dispositivo
+                  </p>
+                  <div className="flex items-center justify-center gap-2 mt-2 text-xs text-muted-foreground">
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                    Aguardando leitura...
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div className="flex flex-col items-center gap-3">
+                <Loader2 className="h-10 w-10 animate-spin text-muted-foreground" />
+                <p className="text-sm text-muted-foreground">Gerando QR Code...</p>
+              </div>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Send Message Modal */}
       <Dialog open={msgOpen} onOpenChange={setMsgOpen}>

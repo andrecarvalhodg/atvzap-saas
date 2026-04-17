@@ -1,6 +1,6 @@
 /**
  * WhatsApp Provider Service
- * Supports: Meta Cloud API, Z-API
+ * Supports: Meta Cloud API, Z-API, Evolution API (QR Code)
  */
 
 interface SendResult {
@@ -14,6 +14,15 @@ interface ConnectionTest {
   phone?: string
   name?: string
   error?: string
+}
+
+// ─── Helpers ────────────────────────────────────────────────────
+
+function getEvolutionServerConfig() {
+  return {
+    apiUrl: (process.env.EVOLUTION_API_URL || "").replace(/\/$/, ""),
+    apiKey: process.env.EVOLUTION_API_KEY || "",
+  }
 }
 
 // ─── Meta Cloud API (Official) ──────────────────────────────────
@@ -87,10 +96,7 @@ async function zapiSendText(
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        phone,
-        message,
-      }),
+      body: JSON.stringify({ phone, message }),
     }
   )
   const data = await res.json()
@@ -123,7 +129,7 @@ async function zapiTestConnection(
   }
 }
 
-// ─── Evolution API ──────────────────────────────────────────────
+// ─── Evolution API (QR Code) ────────────────────────────────────
 
 async function evolutionSendText(
   apiUrl: string,
@@ -172,6 +178,99 @@ async function evolutionTestConnection(
   }
 }
 
+// ─── Evolution API: QR Code helpers ─────────────────────────────
+
+export async function createEvolutionInstance(instanceName: string): Promise<{
+  success: boolean
+  qrcode?: string
+  error?: string
+}> {
+  const { apiUrl, apiKey } = getEvolutionServerConfig()
+  if (!apiUrl || !apiKey) {
+    return { success: false, error: "Evolution API não configurada no servidor" }
+  }
+  try {
+    // Create instance
+    const createRes = await fetch(`${apiUrl}/instance/create`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        apikey: apiKey,
+      },
+      body: JSON.stringify({
+        instanceName,
+        qrcode: true,
+        integration: "WHATSAPP-BAILEYS",
+      }),
+    })
+    const createData = await createRes.json()
+    if (!createRes.ok && createRes.status !== 409) {
+      return { success: false, error: createData.message || "Erro ao criar instância" }
+    }
+
+    // Get QR code
+    await new Promise((r) => setTimeout(r, 1000))
+    const qrRes = await fetch(`${apiUrl}/instance/connect/${instanceName}`, {
+      headers: { apikey: apiKey },
+    })
+    const qrData = await qrRes.json()
+    const qrcode = qrData.base64 || qrData.qrcode?.base64 || qrData.code
+
+    return { success: true, qrcode }
+  } catch (err: any) {
+    return { success: false, error: err.message }
+  }
+}
+
+export async function getEvolutionQRCode(instanceName: string): Promise<{
+  qrcode?: string
+  state?: string
+  phone?: string
+  error?: string
+}> {
+  const { apiUrl, apiKey } = getEvolutionServerConfig()
+  if (!apiUrl || !apiKey) {
+    return { error: "Evolution API não configurada" }
+  }
+  try {
+    // Check state
+    const stateRes = await fetch(`${apiUrl}/instance/connectionState/${instanceName}`, {
+      headers: { apikey: apiKey },
+    })
+    const stateData = await stateRes.json()
+    const state = stateData?.instance?.state
+
+    if (state === "open") {
+      return {
+        state: "open",
+        phone: stateData?.instance?.owner?.replace("@s.whatsapp.net", "") || "",
+      }
+    }
+
+    // Refresh QR code
+    const qrRes = await fetch(`${apiUrl}/instance/connect/${instanceName}`, {
+      headers: { apikey: apiKey },
+    })
+    const qrData = await qrRes.json()
+    const qrcode = qrData.base64 || qrData.qrcode?.base64 || qrData.code
+
+    return { qrcode, state: state || "connecting" }
+  } catch (err: any) {
+    return { error: err.message }
+  }
+}
+
+export async function deleteEvolutionInstance(instanceName: string): Promise<void> {
+  const { apiUrl, apiKey } = getEvolutionServerConfig()
+  if (!apiUrl || !apiKey) return
+  try {
+    await fetch(`${apiUrl}/instance/delete/${instanceName}`, {
+      method: "DELETE",
+      headers: { apikey: apiKey },
+    })
+  } catch {}
+}
+
 // ─── Unified Interface ──────────────────────────────────────────
 
 interface InstanceConfig {
@@ -188,6 +287,8 @@ export async function sendMessage(
   to: string,
   message: string
 ): Promise<SendResult> {
+  const { apiUrl: evoUrl, apiKey: evoKey } = getEvolutionServerConfig()
+
   switch (config.provider) {
     case "meta":
       if (!config.apiToken || !config.phoneNumberId) {
@@ -202,10 +303,13 @@ export async function sendMessage(
       return zapiSendText(config.instanceId, config.apiToken, to, message)
 
     case "evolution":
-      if (!config.apiUrl || !config.apiToken) {
-        return { success: false, error: "URL ou API Key não configurado" }
-      }
-      return evolutionSendText(config.apiUrl, config.apiToken, config.name, to, message)
+      return evolutionSendText(
+        config.apiUrl || evoUrl,
+        config.apiToken || evoKey,
+        config.name,
+        to,
+        message
+      )
 
     default:
       return { success: false, error: `Provider "${config.provider}" não suportado` }
@@ -213,6 +317,8 @@ export async function sendMessage(
 }
 
 export async function testConnection(config: InstanceConfig): Promise<ConnectionTest> {
+  const { apiUrl: evoUrl, apiKey: evoKey } = getEvolutionServerConfig()
+
   switch (config.provider) {
     case "meta":
       if (!config.apiToken || !config.phoneNumberId) {
@@ -227,10 +333,11 @@ export async function testConnection(config: InstanceConfig): Promise<Connection
       return zapiTestConnection(config.instanceId, config.apiToken)
 
     case "evolution":
-      if (!config.apiUrl || !config.apiToken) {
-        return { connected: false, error: "URL ou API Key não configurado" }
-      }
-      return evolutionTestConnection(config.apiUrl, config.apiToken, config.name)
+      return evolutionTestConnection(
+        config.apiUrl || evoUrl,
+        config.apiToken || evoKey,
+        config.name
+      )
 
     default:
       return { connected: false, error: `Provider "${config.provider}" não suportado` }

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server"
 import { auth } from "@/lib/auth"
 import { db } from "@/lib/db"
-import { testConnection } from "@/lib/whatsapp"
+import { testConnection, createEvolutionInstance } from "@/lib/whatsapp"
 
 export async function GET() {
   const session = await auth()
@@ -30,7 +30,33 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Nome e provider são obrigatórios" }, { status: 400 })
   }
 
-  // Test connection before saving
+  // ── Evolution API: create instance on server and get QR code ──
+  if (provider === "evolution") {
+    const evoResult = await createEvolutionInstance(name)
+
+    const instance = await db.whatsAppInstance.create({
+      data: {
+        name,
+        provider: "evolution",
+        apiToken: null,
+        apiUrl: null,
+        instanceId: null,
+        phoneNumberId: null,
+        phone: null,
+        status: "disconnected",
+        isActive: false,
+        userId: session.user.id,
+      },
+    })
+
+    return NextResponse.json({
+      ...instance,
+      qrcode: evoResult.qrcode,
+      connectionTest: { connected: false },
+    }, { status: 201 })
+  }
+
+  // ── Other providers: test connection ──
   const config = { provider, apiToken, apiUrl, instanceId, phoneNumberId, name }
   const test = await testConnection(config)
 

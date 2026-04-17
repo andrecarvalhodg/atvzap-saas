@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server"
 import { auth } from "@/lib/auth"
 import { db } from "@/lib/db"
-import { testConnection } from "@/lib/whatsapp"
+import { testConnection, deleteEvolutionInstance } from "@/lib/whatsapp"
 
 export async function DELETE(
   request: Request,
@@ -18,6 +18,11 @@ export async function DELETE(
   })
   if (!instance) {
     return NextResponse.json({ error: "Not found" }, { status: 404 })
+  }
+
+  // If Evolution API, delete from server too
+  if (instance.provider === "evolution") {
+    await deleteEvolutionInstance(instance.name)
   }
 
   await db.whatsAppInstance.delete({ where: { id } })
