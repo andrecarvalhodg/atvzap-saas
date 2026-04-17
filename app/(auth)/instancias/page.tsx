@@ -127,8 +127,10 @@ export default function InstanciasPage() {
 
   function startQrPolling(instanceId: string) {
     stopQrPolling();
+    let pollCount = 0;
     qrPollRef.current = setInterval(async () => {
       try {
+        pollCount++;
         const res = await fetch(`/api/instances/${instanceId}/qrcode`);
         const data = await res.json();
 
@@ -145,10 +147,11 @@ export default function InstanciasPage() {
             fetchInstances();
           }, 2000);
         } else if (data.qrcode) {
+          // Always update QR code to keep it fresh
           setQrCode(data.qrcode);
         }
       } catch {}
-    }, 3000);
+    }, 5000); // poll every 5s to keep QR fresh
   }
 
   async function handleCreate(e: React.FormEvent) {

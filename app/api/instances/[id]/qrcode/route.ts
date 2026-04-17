@@ -38,5 +38,6 @@ export async function GET(
     return NextResponse.json({ state: "connected", phone: result.phone })
   }
 
-  return NextResponse.json(result)
+  // Always return fresh QR code
+  return NextResponse.json({ ...result, timestamp: Date.now() })
 }
