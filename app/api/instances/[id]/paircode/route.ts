@@ -29,24 +29,29 @@ export async function POST(
   const cleanPhone = phone.replace(/\D/g, "")
 
   try {
-    // Evolution API v1.x pairing code endpoint
-    const res = await fetch(`${apiUrl}/instance/pairingCode/${instance.name}`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        apikey: apiKey,
-      },
-      body: JSON.stringify({ number: cleanPhone }),
-    })
+    // Evolution API v1.x: pairing code via connect endpoint with number param
+    const res = await fetch(
+      `${apiUrl}/instance/connect/${instance.name}?number=${cleanPhone}`,
+      {
+        method: "GET",
+        headers: { apikey: apiKey },
+      }
+    )
     const data = await res.json()
 
-    // Return everything for debugging
+    // v1.x returns pairingCode field when number is provided
+    const code = data?.pairingCode || data?.pairing_code || data?.code
+
+    // Valid pairing code: 8 chars like "ABCD-EFGH" or "ABCDEFGH"
+    if (code && typeof code === "string" && code.length >= 4 && code.length <= 12 && !code.startsWith("data:") && !code.includes("@")) {
+      return NextResponse.json({ code })
+    }
+
+    // Return raw for debugging
     return NextResponse.json({
+      error: "Código não encontrado na resposta",
       httpStatus: res.status,
       keys: Object.keys(data),
-      pairingCode: data?.pairingCode,
-      code: data?.code,
-      pairing_code: data?.pairing_code,
       raw: data,
     })
 
