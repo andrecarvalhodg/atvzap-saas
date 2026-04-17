@@ -281,11 +281,12 @@ export default function InstanciasPage() {
         body: JSON.stringify({ phone: pairPhone.trim() }),
       });
       const data = await res.json();
-      if (data.code) {
-        setPairCode(data.code);
+      const code = data.code || data.pairingCode || data.pairing_code;
+      if (code && code.length <= 12) {
+        setPairCode(code);
         startPairPolling(pairInstanceId);
       } else {
-        setPairError(data.error || "Erro ao gerar código");
+        setPairError(JSON.stringify(data));
       }
     } catch {
       setPairError("Erro de conexão");
