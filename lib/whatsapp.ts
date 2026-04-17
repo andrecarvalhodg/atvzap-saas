@@ -191,6 +191,8 @@ export async function createEvolutionInstance(instanceName: string): Promise<{
   }
   try {
     // Create instance (qrcode: true returns QR in the same response)
+    // v1.x requires a token field; v2.x ignores it
+    const instanceToken = `${instanceName}-${Date.now()}`
     const createRes = await fetch(`${apiUrl}/instance/create`, {
       method: "POST",
       headers: {
@@ -199,6 +201,7 @@ export async function createEvolutionInstance(instanceName: string): Promise<{
       },
       body: JSON.stringify({
         instanceName,
+        token: instanceToken,
         qrcode: true,
         integration: "WHATSAPP-BAILEYS",
       }),
